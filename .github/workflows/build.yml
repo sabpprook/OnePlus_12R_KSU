@@ -1,0 +1,70 @@
+name: build
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install bc bison build-essential ccache curl flex fontconfig g++-multilib gcc-multilib git git-core git-lfs gnupg gperf imagemagick lib32readline-dev lib32z1-dev libc6-dev-i386 libelf-dev libgl1-mesa-dev liblz4-tool libncurses5 libsdl1.2-dev libssl-dev libx11-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools unzip x11proto-core-dev xsltproc zip zlib1g-dev
+
+      - name: Setup prebuilts
+        run: |
+          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master-kernel-build-2022 --depth 1 ~/prebuilts/clang/host/linux-x86
+          git clone https://android.googlesource.com/kernel/prebuilts/build-tools -b master-kernel-build-2022 --depth 1 ~/prebuilts/kernel-build-tools
+
+      - name: Setup kernel sources
+        run: |
+          mkdir -p ~/android/kernel_platform
+          git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8550.git -b oneplus/sm8550_u_14.0.0_oneplus_12r --depth 1 ~/android/kernel_platform/msm-kernel
+          git clone https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550.git -b oneplus/sm8550_u_14.0.0_oneplus_12r --depth 1 ~/android/sm8550
+          cp -a ~/android/sm8550/kernel_platform ~/android/sm8550/vendor ~/android/
+  
+      - name: Setup KernelSU
+        run: |
+          cd ~/android/kernel_platform/msm-kernel
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 20
+
+      - name: Build kernel
+        run: |
+          export LLVM=1
+          export LLVM_IAS=1
+          export ARCH=arm64
+          export PREBUILT=~/prebuilts
+          export PATH=$PREBUILT/clang/host/linux-x86/clang-r450784e/bin:$PATH
+          export PATH=$PREBUILT/kernel-build-tools/linux-x86/bin:$PATH
+          export CROSS_COMPILE=$PREBUILT/clang/host/linux-x86/clang-r450784e/bin/aarch64-linux-gnu-
+          cflags+="-I~/prebuilts/kernel-build-tools/linux-x86/include "
+          ldflags+="-Wl,-rpath,~/prebuilts/kernel-build-tools/linux-x86/lib64 "
+          ldflags+="-L~/prebuilts/kernel-build-tools/linux-x86/lib64 "
+          ldflags+="-fuse-ld=lld --rtlib=compiler-rt"
+          export HOSTCFLAGS="$cflags"
+          export HOSTLDFLAGS="$ldflags"
+          cd ~/android/kernel_platform/msm-kernel
+          make O=~/out -j$(nproc) gki_defconfig
+          make O=~/out -j$(nproc) vendor/kalama_GKI.config
+          make O=~/out -j$(nproc)
+
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-artifact
+          path: |
+            ~/out/arch/arm64/boot/Image
+            ~/out/**/*.ko
